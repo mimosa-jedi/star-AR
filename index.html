@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>星空コンパス AR</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #020617;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            color: #fff;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+            touch-action: none;
+        }
+    </style>
+</head>
+<body class="relative bg-slate-950 text-white overflow-hidden select-none">
+
+    <!-- 権限取得・スタートモーダル -->
+    <div id="permission-modal" class="fixed inset-0 bg-slate-950/90 backdrop-blur-md z-50 flex flex-col items-center justify-center p-6 text-center">
+        <div class="max-w-md w-full bg-slate-900 border border-slate-800 p-8 rounded-3xl shadow-2xl flex flex-col items-center">
+            <div class="w-16 h-16 bg-blue-500/20 text-blue-400 rounded-2xl flex items-center justify-center text-3xl mb-4 border border-blue-500/30">
+                🧭
+            </div>
+            <h1 class="text-2xl font-bold mb-2">星空コンパス AR</h1>
+            <p class="text-sm text-slate-300 mb-6 leading-relaxed">
+                タブレットやスマホを空にかざすと、その方向の星座が表示されます。<br>
+                下のボタンを押してセンサーの利用を許可してください。
+            </p>
+            
+            <button id="start-gyro-btn" class="w-full py-4 bg-blue-600 hover:bg-blue-500 active:scale-95 text-white font-bold rounded-2xl shadow-lg transition-all flex items-center justify-center gap-2 mb-3">
+                <span>🧭 センサーを許可してスタート</span>
+            </button>
+
+            <button id="start-manual-btn" class="w-full py-3 bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-300 font-medium text-xs rounded-xl transition-all">
+                手動（スワイプ操作）で遊ぶ
+            </button>
+        </div>
+    </div>
+
+    <!-- 描画用キャンバス -->
+    <canvas id="starmap"></canvas>
+
+    <!-- UI レイヤー -->
+    <div id="ui-layer" class="pointer-events-none absolute inset-0 p-4 flex flex-col justify-between z-10">
+        
+        <!-- ヘッダーエリア -->
+        <div class="flex justify-between items-start gap-2">
+            <!-- ステータスパネル -->
+            <div class="pointer-events-auto bg-slate-900/80 backdrop-blur-md border border-slate-700/60 px-4 py-2.5 rounded-xl text-xs sm:text-sm text-slate-200 shadow-lg flex flex-col gap-1">
+                <div class="flex items-center gap-2">
+                    <div id="status-indicator" class="w-2.5 h-2.5 rounded-full bg-amber-400"></div>
+                    <div id="status-text" class="font-medium">方位: ---° | 仰角: ---°</div>
+                </div>
+                <div id="mode-text" class="text-[10px] text-slate-400">モード: 未接続</div>
+            </div>
+
+            <!-- 機能切り替えボタン -->
+            <div class="flex gap-2 pointer-events-auto">
+                <button id="toggle-lines" class="bg-slate-900/80 hover:bg-slate-800 backdrop-blur-md border border-slate-700/60 px-3 py-2 rounded-xl text-xs sm:text-sm font-medium text-slate-300 transition flex items-center gap-1.5 shadow-lg">
+                    <span>✨ 星座線</span>
+                    <span id="lines-status" class="text-blue-400 font-bold">ON</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- 中央照準クロスヘア -->
+        <div class="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 pointer-events-none flex flex-col items-center justify-center opacity-25">
+            <div class="w-12 h-12 border border-blue-400 rounded-full flex items-center justify-center">
+                <div class="w-1 h-1 bg-blue-300 rounded-full"></div>
+            </div>
+        </div>
+
+        <!-- 情報ポップアップカード (星タップ時) -->
+        <div id="info-card" class="pointer-events-auto self-center max-w-md w-full bg-slate-900/95 backdrop-blur-md border border-blue-500/40 rounded-2xl p-4 shadow-2xl transition-all transform translate-y-8 opacity-0 hidden mb-16">
+            <div class="flex justify-between items-start mb-1">
+                <div>
+                    <span id="info-type" class="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-blue-950 text-blue-300 border border-blue-800">1等星</span>
+                    <h3 id="info-title" class="text-lg font-bold text-white mt-1">シリウス</h3>
+                </div>
+                <button id="close-info" class="text-slate-400 hover:text-white p-1 text-lg">✕</button>
+            </div>
+            <p id="info-desc" class="text-xs text-slate-300 leading-relaxed mb-3">
+                おおいぬ座で最も明るい恒星で、全天で最も明るい1等星です。
+            </p>
+            <div class="grid grid-cols-2 gap-2 text-[11px] text-slate-400 border-t border-slate-800 pt-2">
+                <div>距離: <span id="info-dist" class="text-slate-200">8.6 光年</span></div>
+                <div>方位角: <span id="info-azimuth" class="text-slate-200">180°</span></div>
+            </div>
+        </div>
+
+        <!-- フッター：方角クイックジャンプ -->
+        <div class="flex flex-col gap-2 pointer-events-auto">
+            <div class="grid grid-cols-4 gap-2 bg-slate-900/80 backdrop-blur-md p-2 rounded-2xl border border-slate-800 shadow-xl max-w-md mx-auto w-full">
+                <button onclick="setDirection(0)" class="py-2 bg-slate-800/80 hover:bg-blue-600/50 text-xs font-bold rounded-xl transition border border-slate-700/50 text-center">北 (N)</button>
+                <button onclick="setDirection(90)" class="py-2 bg-slate-800/80 hover:bg-blue-600/50 text-xs font-bold rounded-xl transition border border-slate-700/50 text-center">東 (E)</button>
+                <button onclick="setDirection(180)" class="py-2 bg-slate-800/80 hover:bg-blue-600/50 text-xs font-bold rounded-xl transition border border-slate-700/50 text-center">南 (S)</button>
+                <button onclick="setDirection(270)" class="py-2 bg-slate-800/80 hover:bg-blue-600/50 text-xs font-bold rounded-xl transition border border-slate-700/50 text-center">西 (W)</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- アプリのメインロジック -->
+    <script>
+        const canvas = document.getElementById('starmap');
+        const ctx = canvas.getContext('2d');
+        const statusText = document.getElementById('status-text');
+        const modeText = document.getElementById('mode-text');
+        const statusIndicator = document.getElementById('status-indicator');
+        const permissionModal = document.getElementById('permission-modal');
+        const startGyroBtn = document.getElementById('start-gyro-btn');
+        const startManualBtn = document.getElementById('start-manual-btn');
+        const toggleLinesBtn = document.getElementById('toggle-lines');
+        const linesStatus = document.getElementById('lines-status');
+
+        // 情報カード要素
+        const infoCard = document.getElementById('info-card');
+        const infoTitle = document.getElementById('info-title');
+        const infoType = document.getElementById('info-type');
+        const infoDesc = document.getElementById('info-desc');
+        const infoDist = document.getElementById('info-dist');
+        const infoAzimuth = document.getElementById('info-azimuth');
+        const closeInfoBtn = document.getElementById('close-info');
+
+        let width, height;
+        let showLines = true;
+        let isGyroMode = false;
+
+        // カメラ視点 (yaw: 方位角, pitch: 仰角)
+        let yaw = 0;
+        let pitch = 30;
+
+        // 手動操作用変数
+        let isDragging = false;
+        let previousMousePosition = { x: 0, y: 0 };
+        let velocityX = 0;
+        let velocityY = 0;
+        let selectedObject = null;
+
+        // 主要な天体データ
+        const stars = [
+            { id: 'polaris', name: 'ポラリス (北極星)', constellation: 'こぐま座', azimuth: 0, altitude: 35, mag: 1.9, color: '#f8fafc', dist: '433光年', desc: '北の空の目印となる星。地球の自転軸の延長線上に位置しています。' },
+            { id: 'sirius', name: 'シリウス', constellation: 'おおいぬ座', azimuth: 140, altitude: 15, mag: 0.5, color: '#93c5fd', dist: '8.6光年', desc: '全天で最も明るい恒星（-1.46等）。「冬の大三角」の1つです。' },
+            { id: 'betelgeuse', name: 'ベテルギウス', constellation: 'オリオン座', azimuth: 125, altitude: 25, mag: 0.8, color: '#fca5a5', dist: '642光年', desc: 'オリオン座の赤色超巨星。寿命が近づいていることで知られています。' },
+            { id: 'rigel', name: 'リゲル', constellation: 'オリオン座', azimuth: 135, altitude: 5, mag: 0.7, color: '#bfdbfe', dist: '860光年', desc: 'オリオン座の足元に輝く青白色の超巨星です。' },
+            { id: 'procyon', name: 'プロキオン', constellation: 'こいぬ座', azimuth: 110, altitude: 30, mag: 1.0, color: '#fef08a', dist: '11.5光年', desc: 'こいぬ座の1等星。「冬の大三角」を形成します。' },
+            { id: 'vega', name: 'ベガ (織姫星)', constellation: 'こと座', azimuth: 280, altitude: 60, mag: 0.6, color: '#a5f3fc', dist: '25光年', desc: '夏の大三角のひとつ。七夕伝説の「織姫星」です。' },
+            { id: 'altair', name: 'アルタイル (彦星)', constellation: 'わし座', azimuth: 250, altitude: 45, mag: 1.1, color: '#e0f2fe', dist: '16.7光年', desc: '夏の大三角のひとつ。七夕伝説の「彦星」です。' },
+            { id: 'deneb', name: 'デネブ', constellation: 'はくちょう座', azimuth: 300, altitude: 70, mag: 1.2, color: '#f1f5f9', dist: '2600光年', desc: 'はくちょう座の尾に位置する非常に明るい白超巨星です。' },
+            { id: 'arcturus', name: 'アルクトゥルス', constellation: 'うしかい座', azimuth: 210, altitude: 40, mag: 0.8, color: '#fdba74', dist: '36.7光年', desc: '春の夜空に輝くオレンジ色の1等星です。' },
+            { id: 'spica', name: 'スピカ', constellation: 'おとめ座', azimuth: 180, altitude: 20, mag: 1.2, color: '#bae6fd', dist: '250光年', desc: 'おとめ座の1等星で「真珠星」とも呼ばれます。' }
+        ];
+
+        // 星座線データ
+        const constellationLines = [
+            { from: 'betelgeuse', to: 'rigel' },
+            { from: 'betelgeuse', to: 'sirius' },
+            { from: 'sirius', to: 'procyon' },
+            { from: 'procyon', to: 'betelgeuse' },
+            { from: 'vega', to: 'altair' },
+            { from: 'altair', to: 'deneb' },
+            { from: 'deneb', to: 'vega' },
+            { from: 'arcturus', to: 'spica' }
+        ];
+
+        // 背景星の生成
+        const backgroundStars = [];
+        for (let i = 0; i < 500; i++) {
+            backgroundStars.push({
+                azimuth: Math.random() * 360,
+                altitude: (Math.random() - 0.2) * 130,
+                size: Math.random() * 1.5 + 0.4,
+                alpha: Math.random() * 0.8 + 0.2
+            });
+        }
+
+        function resize() {
+            width = canvas.width = window.innerWidth;
+            height = canvas.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        // 🧭 iOS / Android ジャイロセンサー許可要求ハンドラ
+        startGyroBtn.addEventListener('click', async () => {
+            if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+                try {
+                    // iOS 13+ の厳格なユーザーアクション同期リクエスト
+                    const response = await DeviceOrientationEvent.requestPermission();
+                    if (response === 'granted') {
+                        enableGyro();
+                    } else {
+                        alert('センサーへのアクセスが拒否されました。スワイプ操作モードで起動します。');
+                        enableManualMode();
+                    }
+                } catch (e) {
+                    console.error(e);
+                    alert('センサー許可でエラーが発生しました。手動モードで開始します。');
+                    enableManualMode();
+                }
+            } else if (window.DeviceOrientationEvent) {
+                // Android や WebKit非対応ブラウザ
+                enableGyro();
+            } else {
+                alert('お使いの端末・ブラウザはジャイロセンサー非対応です。手動モードで起動します。');
+                enableManualMode();
+            }
+        });
+
+        startManualBtn.addEventListener('click', () => {
+            enableManualMode();
+        });
+
+        function enableGyro() {
+            window.addEventListener('deviceorientation', handleOrientation, true);
+            isGyroMode = true;
+            permissionModal.classList.add('hidden');
+            statusIndicator.className = "w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse";
+            modeText.textContent = "モード: ジャイロ連動中 🧭";
+        }
+
+        function enableManualMode() {
+            isGyroMode = false;
+            permissionModal.classList.add('hidden');
+            statusIndicator.className = "w-2.5 h-2.5 rounded-full bg-blue-400";
+            modeText.textContent = "モード: スワイプ操作 👆";
+            updateStatusText();
+        }
+
+        // センサー座標変換 (iOS / Android 双方の保持角度に対応)
+        function handleOrientation(e) {
+            if (!isGyroMode) return;
+
+            let alpha = e.alpha || 0; // 方位角 (0~360)
+            let beta = e.beta || 0;   // 前後傾き (-180~180)
+            let gamma = e.gamma || 0; // 左右傾き (-90~90)
+
+            // iOS の電子コンパス優先適用
+            if (e.webkitCompassHeading) {
+                yaw = e.webkitCompassHeading;
+            } else {
+                yaw = (360 - alpha) % 360;
+            }
+
+            // 端末の立ち姿勢（仰角）の補正計算
+            pitch = Math.max(-85, Math.min(85, beta - 45));
+
+            updateStatusText();
+        }
+
+        window.setDirection = function(targetYaw) {
+            yaw = targetYaw;
+            pitch = 25;
+            updateStatusText();
+        }
+
+        function updateStatusText() {
+            const normalizedYaw = (Math.round(yaw) % 360 + 360) % 360;
+            let dirName = '北';
+            if (normalizedYaw >= 45 && normalizedYaw < 135) dirName = '東';
+            else if (normalizedYaw >= 135 && normalizedYaw < 225) dirName = '南';
+            else if (normalizedYaw >= 225 && normalizedYaw < 315) dirName = '西';
+
+            statusText.textContent = `方位: ${normalizedYaw}° (${dirName}) | 仰角: ${Math.round(pitch)}°`;
+        }
+
+        toggleLinesBtn.addEventListener('click', () => {
+            showLines = !showLines;
+            linesStatus.textContent = showLines ? "ON" : "OFF";
+            linesStatus.className = showLines ? "text-blue-400 font-bold" : "text-slate-500 font-bold";
+        });
+
+        closeInfoBtn.addEventListener('click', hideInfoCard);
+
+        function hideInfoCard() {
+            infoCard.classList.add('opacity-0', 'translate-y-8');
+            setTimeout(() => {
+                infoCard.classList.add('hidden');
+                selectedObject = null;
+            }, 200);
+        }
+
+        function showStarInfo(star) {
+            selectedObject = star;
+            infoTitle.textContent = star.name;
+            infoType.textContent = star.constellation;
+            infoDesc.textContent = star.desc;
+            infoDist.textContent = star.dist;
+            infoAzimuth.textContent = `${Math.round(star.azimuth)}°`;
+
+            infoCard.classList.remove('hidden');
+            setTimeout(() => {
+                infoCard.classList.remove('opacity-0', 'translate-y-8');
+            }, 10);
+        }
+
+        // 手動操作 (タッチ・スワイプ)
+        function onPointerDown(e) {
+            if (isGyroMode) return;
+            isDragging = true;
+            velocityX = 0;
+            velocityY = 0;
+            previousMousePosition = {
+                x: e.clientX || (e.touches && e.touches[0].clientX),
+                y: e.clientY || (e.touches && e.touches[0].clientY)
+            };
+        }
+
+        function onPointerMove(e) {
+            if (!isDragging || isGyroMode) return;
+            const clientX = e.clientX || (e.touches && e.touches[0].clientX);
+            const clientY = e.clientY || (e.touches && e.touches[0].clientY);
+            if (clientX === undefined || clientY === undefined) return;
+
+            const deltaX = clientX - previousMousePosition.x;
+            const deltaY = clientY - previousMousePosition.y;
+
+            velocityX = -deltaX * 0.35;
+            velocityY = deltaY * 0.35;
+
+            yaw = (yaw + velocityX + 360) % 360;
+            pitch = Math.max(-85, Math.min(85, pitch + velocityY));
+
+            updateStatusText();
+            previousMousePosition = { x: clientX, y: clientY };
+        }
+
+        function onPointerUp() { isDragging = false; }
+
+        canvas.addEventListener('mousedown', onPointerDown);
+        window.addEventListener('mousemove', onPointerMove);
+        window.addEventListener('mouseup', onPointerUp);
+
+        canvas.addEventListener('touchstart', onPointerDown, { passive: true });
+        window.addEventListener('touchmove', onPointerMove, { passive: true });
+        window.addEventListener('touchend', onPointerUp);
+
+        // タップ選択判定
+        canvas.addEventListener('click', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const clickX = e.clientX - rect.left;
+            const clickY = e.clientY - rect.top;
+
+            let hit = false;
+            stars.forEach(star => {
+                const pos = getScreenCoords(star.azimuth, star.altitude);
+                if (pos.visible) {
+                    const dist = Math.hypot(pos.x - clickX, pos.y - clickY);
+                    if (dist < 35) {
+                        showStarInfo(star);
+                        hit = true;
+                    }
+                }
+            });
+
+            if (!hit && selectedObject) hideInfoCard();
+        });
+
+        // 3D全天球投影 -> 2Dスクリーン変換
+        function getScreenCoords(az, alt) {
+            let diffYaw = az - yaw;
+            while (diffYaw > 180) diffYaw -= 360;
+            while (diffYaw < -180) diffYaw += 360;
+
+            let diffPitch = alt - pitch;
+            const fov = 65;
+            const scale = width / fov;
+
+            const x = width / 2 + diffYaw * scale;
+            const y = height / 2 - diffPitch * scale;
+
+            const visible = Math.abs(diffYaw) < 90 && Math.abs(diffPitch) < 80;
+            return { x, y, visible };
+        }
+
+        // 描画メインループ
+        function draw() {
+            // 手動モード時の慣性減速
+            if (!isGyroMode && !isDragging && (Math.abs(velocityX) > 0.01 || Math.abs(velocityY) > 0.01)) {
+                yaw = (yaw + velocityX + 360) % 360;
+                pitch = Math.max(-85, Math.min(85, pitch + velocityY));
+                velocityX *= 0.92;
+                velocityY *= 0.92;
+                updateStatusText();
+            }
+
+            // 背景グラデーション
+            const bgGrad = ctx.createLinearGradient(0, 0, 0, height);
+            bgGrad.addColorStop(0, '#020617');
+            bgGrad.addColorStop(0.7, '#0f172a');
+            bgGrad.addColorStop(1, '#1e1b4b');
+            ctx.fillStyle = bgGrad;
+            ctx.fillRect(0, 0, width, height);
+
+            // 方位線
+            drawHorizonAndDirections();
+
+            // 背景小星
+            backgroundStars.forEach(star => {
+                const pos = getScreenCoords(star.azimuth, star.altitude);
+                if (pos.visible) {
+                    ctx.beginPath();
+                    ctx.arc(pos.x, pos.y, star.size, 0, Math.PI * 2);
+                    ctx.fillStyle = `rgba(255, 255, 255, ${star.alpha})`;
+                    ctx.fill();
+                }
+            });
+
+            // 星座線
+            if (showLines) {
+                ctx.strokeStyle = 'rgba(96, 165, 250, 0.4)';
+                ctx.lineWidth = 1.5;
+                ctx.setLineDash([4, 4]);
+
+                const starMap = {};
+                stars.forEach(s => starMap[s.id] = s);
+
+                constellationLines.forEach(line => {
+                    const a = starMap[line.from];
+                    const b = starMap[line.to];
+                    if (a && b) {
+                        const posA = getScreenCoords(a.azimuth, a.altitude);
+                        const posB = getScreenCoords(b.azimuth, b.altitude);
+                        if (posA.visible || posB.visible) {
+                            ctx.beginPath();
+                            ctx.moveTo(posA.x, posA.y);
+                            ctx.lineTo(posB.x, posB.y);
+                            ctx.stroke();
+                        }
+                    }
+                });
+                ctx.setLineDash([]);
+            }
+
+            // 主要恒星
+            stars.forEach(star => {
+                const pos = getScreenCoords(star.azimuth, star.altitude);
+                if (pos.visible) {
+                    const isSelected = selectedObject && selectedObject.id === star.id;
+                    const r = Math.max(3.5, 8.5 - star.mag * 2.5);
+
+                    if (isSelected) {
+                        ctx.beginPath();
+                        ctx.arc(pos.x, pos.y, r + 10, 0, Math.PI * 2);
+                        ctx.strokeStyle = '#60a5fa';
+                        ctx.lineWidth = 2.5;
+                        ctx.stroke();
+                    }
+
+                    // グローエフェクト
+                    const glow = ctx.createRadialGradient(pos.x, pos.y, 0, pos.x, pos.y, r * 3.5);
+                    glow.addColorStop(0, star.color);
+                    glow.addColorStop(1, 'transparent');
+                    ctx.fillStyle = glow;
+                    ctx.beginPath();
+                    ctx.arc(pos.x, pos.y, r * 3.5, 0, Math.PI * 2);
+                    ctx.fill();
+
+                    // 星本体
+                    ctx.beginPath();
+                    ctx.arc(pos.x, pos.y, r, 0, Math.PI * 2);
+                    ctx.fillStyle = '#ffffff';
+                    ctx.fill();
+
+                    // 名前ラベル
+                    ctx.font = isSelected ? "bold 14px sans-serif" : "12px sans-serif";
+                    ctx.fillStyle = isSelected ? "#60a5fa" : "#cbd5e1";
+                    ctx.fillText(star.name, pos.x + r + 6, pos.y + 4);
+                }
+            });
+
+            requestAnimationFrame(draw);
+        }
+
+        // 地平線と方位指標
+        function drawHorizonAndDirections() {
+            const directions = [
+                { name: '北 (N)', az: 0 },
+                { name: '東 (E)', az: 90 },
+                { name: '南 (S)', az: 180 },
+                { name: '西 (W)', az: 270 }
+            ];
+
+            directions.forEach(dir => {
+                const pos = getScreenCoords(dir.az, 0);
+                if (pos.visible) {
+                    ctx.fillStyle = '#38bdf8';
+                    ctx.font = 'bold 14px sans-serif';
+                    ctx.textAlign = 'center';
+                    ctx.fillText(dir.name, pos.x, pos.y + 20);
+                    ctx.textAlign = 'left';
+
+                    ctx.beginPath();
+                    ctx.arc(pos.x, pos.y, 4, 0, Math.PI * 2);
+                    ctx.fillStyle = '#38bdf8';
+                    ctx.fill();
+                }
+            });
+        }
+
+        // ループ起動
+        window.onload = function() {
+            draw();
+        };
+    </script>
+</body>
+</html>
